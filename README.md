@@ -20,6 +20,25 @@ would cost pay-as-you-go) — a measure of *volume and ROI*, not a bill.
 
 ## 1. Installation
 
+### Homebrew (macOS / Linux)
+
+```sh
+brew install AlexGladkov/quickai/quickai
+```
+
+### As a Claude Code plugin (adds the MCP server, ask from a chat)
+
+```shell
+/plugin marketplace add AlexGladkov/quickai
+/plugin install quickai@quickai
+```
+
+The plugin registers the `quickai` MCP server, so you can just say *"profile the my-app
+project"* in a chat. It calls the `quickai` binary — install it first (Homebrew above, or
+`cargo install --git https://github.com/AlexGladkov/quickai`) so it's on your `PATH`.
+
+### From source
+
 Requires **Rust** (1.75+). SQLite is bundled — no system deps.
 
 ```sh
@@ -29,10 +48,12 @@ cargo build --release
 # binary: ./target/release/quickai   (optionally: cp it into ~/.local/bin)
 ```
 
-First run builds the index from `~/.claude/projects/**/*.jsonl`:
+### First run
+
+Build the index from `~/.claude/projects/**/*.jsonl`:
 
 ```sh
-./target/release/quickai index
+quickai index
 ```
 
 The index lives at `~/.claude/quickai.db` (pure derivative of the transcripts —

@@ -1,0 +1,17 @@
+{
+  "name": "quickai",
+  "displayName": "quickai — Claude Code profiler",
+  "version": "0.1.0",
+  "description": "Profile tokens, API-equivalent cost and time per task/subagent/model — straight from a chat. Requires the `quickai` binary on PATH (brew install AlexGladkov/quickai/quickai).",
+  "author": { "name": "Alex Gladkov", "url": "https://github.com/AlexGladkov" },
+  "homepage": "https://github.com/AlexGladkov/quickai",
+  "repository": "https://github.com/AlexGladkov/quickai",
+  "license": "MIT",
+  "keywords": ["profiler", "claude-code", "tokens", "cost", "mcp"],
+  "mcpServers": {
+    "quickai": {
+      "command": "quickai",
+      "args": ["mcp"]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "quickai",
+  "description": "quickai — profiler for Claude Code (tokens, cost, time; CLI + HTML report + MCP)",
+  "owner": { "name": "Alex Gladkov", "url": "https://github.com/AlexGladkov" },
+  "plugins": [
+    {
+      "name": "quickai",
+      "displayName": "quickai — Claude Code profiler",
+      "description": "Ask the model to profile your usage: tokens, API-equivalent cost and time per task/subagent/model, per project. Registers the quickai MCP server.",
+      "category": "monitoring",
+      "source": "./",
+      "homepage": "https://github.com/AlexGladkov/quickai",
+      "version": "0.1.0",
+      "keywords": ["profiler", "tokens", "cost", "time", "mcp"]
+    }
+  ]
+}
