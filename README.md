@@ -23,7 +23,7 @@ would cost pay-as-you-go) — a measure of *volume and ROI*, not a bill.
 ### Homebrew (macOS / Linux)
 
 ```sh
-brew install AlexGladkov/quickai/quickai
+brew install AlexGladkov/tap/quickai
 ```
 
 ### As a Claude Code plugin (adds the MCP server, ask from a chat)
@@ -36,6 +36,8 @@ brew install AlexGladkov/quickai/quickai
 The plugin registers the `quickai` MCP server, so you can just say *"profile the my-app
 project"* in a chat. It calls the `quickai` binary — install it first (Homebrew above, or
 `cargo install --git https://github.com/AlexGladkov/quickai`) so it's on your `PATH`.
+
+> Prebuilt for Apple Silicon (installs in ~1s); Intel-mac / Linux build from source (needs Rust).
 
 ### From source
 
