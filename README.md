@@ -29,8 +29,8 @@ brew install AlexGladkov/tap/quickai
 ### As a Claude Code plugin (adds the MCP server, ask from a chat)
 
 ```shell
-/plugin marketplace add AlexGladkov/quickai
-/plugin install quickai@quickai
+/plugin marketplace add AlexGladkov/claude
+/plugin install quickai@alexgladkov
 ```
 
 The plugin registers the `quickai` MCP server, so you can just say *"profile the my-app
