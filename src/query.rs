@@ -31,6 +31,35 @@ pub struct DbStats {
     pub total_tokens: i64,
 }
 
+#[derive(Debug)]
+pub struct SourceRow {
+    pub source: String,
+    pub turns: i64,
+    pub out_tokens: i64,
+    pub cost_usd: f64,
+}
+
+/// Разбивка по источникам данных (claude|codex|opencode|…) с фильтром по проекту.
+pub fn sources(conn: &Connection, proj: &str) -> Result<Vec<SourceRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(NULLIF(source,''),'claude') AS source,
+                COUNT(*), SUM(output_tokens), SUM(cost_usd)
+         FROM turns WHERE project LIKE ?1
+         GROUP BY source ORDER BY SUM(cost_usd) DESC",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![plike(proj)], |r| {
+            Ok(SourceRow {
+                source: r.get(0)?,
+                turns: r.get(1)?,
+                out_tokens: r.get(2)?,
+                cost_usd: r.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 pub fn stats(conn: &Connection, proj: &str) -> Result<DbStats> {
     let p = plike(proj);
     let one = |sql: &str| -> Result<i64> {
