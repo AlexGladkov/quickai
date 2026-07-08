@@ -1,6 +1,7 @@
 //! quickai — профайлер работы Claude Code.
 
 mod cli;
+mod export;
 mod index;
 mod mcp;
 mod model;
@@ -102,6 +103,18 @@ enum Cmd {
     },
     /// Запустить MCP-сервер (stdio) — те же запросы из диалога
     Mcp,
+    /// Экспорт агрегатов в JSON (машинно-читаемый дамп для внешнего сбора)
+    Export {
+        /// Фильтр по проекту (подстрока) — пусто = все проекты
+        #[arg(long)]
+        project: Option<String>,
+        /// JSON одной строкой (по умолчанию — компактный; --pretty для форматирования)
+        #[arg(long)]
+        pretty: bool,
+        /// Совместимость с CLI-паттерном других команд (JSON — единственный формат)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -212,6 +225,10 @@ fn main() -> Result<()> {
         }
         Cmd::Mcp => {
             mcp::serve()?;
+        }
+        Cmd::Export { project, pretty, json: _ } => {
+            let conn = index::open_db()?;
+            export::run(&conn, project.as_deref().unwrap_or(""), pretty)?;
         }
     }
     Ok(())
