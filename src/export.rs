@@ -45,6 +45,10 @@ pub fn build(conn: &Connection, proj: &str) -> Result<Value> {
         .into_iter()
         .map(|m| json!({"model": m.model, "turns": m.turns, "median_gap_ms": m.median_gap_ms}))
         .collect();
+    let by_source: Vec<Value> = query::sources(conn, proj)?
+        .into_iter()
+        .map(|s| json!({"source": s.source, "turns": s.turns, "out_tokens": s.out_tokens, "cost_usd": s.cost_usd}))
+        .collect();
 
     Ok(json!({
         "schema_version": EXPORT_SCHEMA_VERSION,
@@ -65,6 +69,7 @@ pub fn build(conn: &Connection, proj: &str) -> Result<Value> {
         "by_project": top_rows(conn, "project", proj, 1000)?,
         "by_model": top_rows(conn, "model", proj, 100)?,
         "by_agent_type": top_rows(conn, "agenttype", proj, 200)?,
+        "by_source": by_source,
         "tools": tools,
         "waste": waste,
         "latency": latency,

@@ -1,9 +1,9 @@
-//! DDL SQLite. Схема — производная от jsonl (source of truth), reindex идемпотентен.
+//! DDL SQLite. Схема — производная от транскриптов (source of truth), reindex идемпотентен.
 
 use anyhow::Result;
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub fn init(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -41,6 +41,7 @@ pub fn init(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
             project    TEXT,
+            source     TEXT,     -- источник данных (claude|codex|opencode|…)
             cwd        TEXT,
             git_branch TEXT,
             first_ts   INTEGER,
@@ -52,6 +53,7 @@ pub fn init(conn: &Connection) -> Result<()> {
             prompt_id    TEXT PRIMARY KEY,
             session_id   TEXT,
             project      TEXT,
+            source       TEXT,
             text         TEXT,
             first_ts     INTEGER,
             last_ts      INTEGER,
@@ -67,6 +69,7 @@ pub fn init(conn: &Connection) -> Result<()> {
             prompt_id  TEXT,
             session_id TEXT,
             project    TEXT,
+            source     TEXT,
             agent_type TEXT,
             file_path  TEXT,
             first_ts   INTEGER,
@@ -88,6 +91,8 @@ pub fn init(conn: &Connection) -> Result<()> {
             prompt_id      TEXT,
             session_id     TEXT,
             project        TEXT,
+            source         TEXT,
+            ext_id         TEXT,     -- стабильный id turn'а из источника (дедуп иммутабельных файлов)
             agent_run_id   TEXT,
             is_sidechain   INTEGER,
             model          TEXT,
@@ -108,6 +113,7 @@ pub fn init(conn: &Connection) -> Result<()> {
             tool_use_id  TEXT PRIMARY KEY,
             name         TEXT,
             project      TEXT,
+            source       TEXT,
             session_id   TEXT,
             agent_run_id TEXT,
             is_error     INTEGER DEFAULT 0
@@ -127,9 +133,42 @@ pub fn init(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_agent_proj   ON agent_runs(project);
         "#,
     )?;
+
+    migrate(conn)?;
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_turns_source ON turns(source);
+         -- дедуп OpenCode-turn'ов по (source, ext_id); NULL (Claude) в индекс не входят.
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_extid ON turns(source, ext_id)
+             WHERE ext_id IS NOT NULL;",
+    )?;
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version', ?1)",
         [SCHEMA_VERSION],
     )?;
+    Ok(())
+}
+
+/// Аддитивные миграции существующих БД: доливаем недостающие колонки. Проверяем по
+/// наличию колонки (а не по версии) — устойчиво к любому промежуточному состоянию.
+/// До v2 всё было Claude Code, поэтому `source` доливаем с DEFAULT 'claude' без reindex.
+fn migrate(conn: &Connection) -> Result<()> {
+    for t in ["sessions", "tasks", "agent_runs", "turns", "tool_calls"] {
+        ensure_col(conn, t, "source", "TEXT DEFAULT 'claude'")?;
+    }
+    ensure_col(conn, "turns", "ext_id", "TEXT")?;
+    Ok(())
+}
+
+/// Добавить колонку, если её ещё нет (идемпотентно).
+fn ensure_col(conn: &Connection, table: &str, col: &str, decl: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == col);
+    if !exists {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), [])?;
+    }
     Ok(())
 }

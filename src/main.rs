@@ -9,6 +9,7 @@ mod parse;
 mod pricing;
 mod query;
 mod report;
+mod source;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -22,11 +23,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Построить/обновить индекс из ~/.claude/projects
+    /// Построить/обновить индекс из транскриптов источника
     Index {
-        /// Снести и перечитать всё с нуля
+        /// Снести и перечитать всё с нуля (в пределах источника)
         #[arg(long)]
         rebuild: bool,
+        /// Источник данных: claude (по умолчанию) | opencode
+        #[arg(long, default_value = "claude")]
+        source: String,
     },
     /// Сводка по всему индексу
     Stats,
@@ -126,12 +130,16 @@ enum ExportFormat {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Index { rebuild } => {
+        Cmd::Index { rebuild, source } => {
+            let src = source::resolve(&source)?;
             let mut conn = index::open_db()?;
-            let s = index::run(&mut conn, rebuild)?;
+            let s = index::run(&mut conn, rebuild, src.as_ref())?;
             println!(
-                "индекс готов: {} файлов просмотрено, {} проиндексировано, +{} turn'ов",
-                s.files_scanned, s.files_indexed, s.turns_added
+                "индекс готов [{}]: {} файлов просмотрено, {} проиндексировано, +{} turn'ов",
+                src.name(),
+                s.files_scanned,
+                s.files_indexed,
+                s.turns_added
             );
         }
         Cmd::Stats => {
