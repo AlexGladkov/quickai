@@ -11,7 +11,7 @@ mod query;
 mod report;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "quickai", version, about = "Профайлер работы Claude Code: токены, деньги, агенты")]
@@ -103,18 +103,24 @@ enum Cmd {
     },
     /// Запустить MCP-сервер (stdio) — те же запросы из диалога
     Mcp,
-    /// Экспорт агрегатов в JSON (машинно-читаемый дамп для внешнего сбора)
+    /// Экспорт агрегатов в машинно-читаемый дамп для внешнего сбора
     Export {
         /// Фильтр по проекту (подстрока) — пусто = все проекты
         #[arg(long)]
         project: Option<String>,
-        /// JSON одной строкой (по умолчанию — компактный; --pretty для форматирования)
+        /// Форматировать JSON (по умолчанию — компактный одной строкой)
         #[arg(long)]
         pretty: bool,
-        /// Совместимость с CLI-паттерном других команд (JSON — единственный формат)
-        #[arg(long)]
-        json: bool,
+        /// Формат вывода (пока только json; задел под будущие форматы)
+        #[arg(long, value_enum, default_value_t = ExportFormat::Json)]
+        format: ExportFormat,
     },
+}
+
+/// Формат экспортного дампа. Новые форматы добавляются сюда.
+#[derive(Clone, Debug, ValueEnum)]
+enum ExportFormat {
+    Json,
 }
 
 fn main() -> Result<()> {
@@ -226,9 +232,13 @@ fn main() -> Result<()> {
         Cmd::Mcp => {
             mcp::serve()?;
         }
-        Cmd::Export { project, pretty, json: _ } => {
+        Cmd::Export { project, pretty, format } => {
             let conn = index::open_db()?;
-            export::run(&conn, project.as_deref().unwrap_or(""), pretty)?;
+            match format {
+                ExportFormat::Json => {
+                    export::run(&conn, project.as_deref().unwrap_or(""), pretty)?;
+                }
+            }
         }
     }
     Ok(())
