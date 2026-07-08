@@ -28,7 +28,7 @@ enum Cmd {
         /// Снести и перечитать всё с нуля (в пределах источника)
         #[arg(long)]
         rebuild: bool,
-        /// Источник данных (claude — по умолчанию; далее codex/opencode)
+        /// Источник данных: claude (по умолчанию) | opencode
         #[arg(long, default_value = "claude")]
         source: String,
     },

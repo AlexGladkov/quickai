@@ -1,17 +1,15 @@
-//! Инкрементальный индексатор: walk источника → normalize (LineEvent) → SQLite.
+//! Инкрементальный индексатор: walk источника → normalize (Event) → SQLite.
 //!
-//! Ядро не знает формата транскриптов — оно ходит по файлам источника, зовёт
-//! [`DataSource::parse_line`] и пишет нормализованные строки. Claude/Codex/OpenCode —
-//! разные `impl DataSource` (см. [`crate::source`]).
+//! Ядро не знает формата транскриптов — адаптер ([`crate::source::DataSource`]) сам
+//! обходит свои файлы и отдаёт нормализованные [`Event`]. Индексатор применяет их к
+//! БД, ведёт инкрементальный курсор (таблица `files`) и пересобирает агрегаты.
 
 pub mod schema;
 
 use crate::pricing;
-use crate::source::DataSource;
-use anyhow::{Context, Result};
+use crate::source::{DataSource, Event};
+use anyhow::Result;
 use rusqlite::Connection;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::Path;
 use walkdir::WalkDir;
 
 pub fn db_path() -> std::path::PathBuf {
@@ -57,7 +55,7 @@ pub fn run(conn: &mut Connection, rebuild: bool, source: &dyn DataSource) -> Res
     let tx = conn.transaction()?;
     for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        if !source.owns(path) {
+        if !path.is_file() || !source.owns(path) {
             continue;
         }
         stats.files_scanned += 1;
@@ -84,16 +82,21 @@ pub fn run(conn: &mut Connection, rebuild: bool, source: &dyn DataSource) -> Res
             continue; // не менялся — пропуск
         }
 
-        let project = source.project_of(path, &root);
-        let (added, last_prompt) =
-            index_file(&tx, source, path, &project, prev_read as u64, seed_prompt)?;
+        let batch = source.read_file(path, prev_read as u64, seed_prompt)?;
+        let added = apply_events(&tx, src, &batch.events)?;
         stats.turns_added += added;
         stats.files_indexed += 1;
 
         tx.execute(
             "INSERT OR REPLACE INTO files(path,mtime,size,bytes_read,last_indexed,last_prompt_id)
              VALUES(?1,?2,?3,?4,strftime('%s','now'),?5)",
-            rusqlite::params![path.to_string_lossy(), mtime, size as i64, size as i64, last_prompt],
+            rusqlite::params![
+                path.to_string_lossy(),
+                mtime,
+                size as i64,
+                batch.bytes as i64,
+                batch.last_prompt
+            ],
         )?;
     }
     tx.commit()?;
@@ -102,134 +105,101 @@ pub fn run(conn: &mut Connection, rebuild: bool, source: &dyn DataSource) -> Res
     Ok(stats)
 }
 
-/// Прочитать хвост файла с офсета, вставить turn'ы через нормализованные [`LineEvent`].
-/// promptId живёт только на user-строках → протягиваем вперёд на assistant-turn'ы.
-/// Возврат: (число turn'ов, последний виденный promptId — seed для след. дочитывания).
-fn index_file(
-    conn: &Connection,
-    source: &dyn DataSource,
-    path: &Path,
-    project: &str,
-    from: u64,
-    seed_prompt: Option<String>,
-) -> Result<(u64, Option<String>)> {
-    let mut f = std::fs::File::open(path).with_context(|| format!("open {path:?}"))?;
-    f.seek(SeekFrom::Start(from))?;
-    let reader = BufReader::new(&mut f as &mut dyn Read);
-
-    let src = source.name();
-    let agent_run_id = source.agent_run_id_of(path); // Some для субагентских файлов
-    let mut count = 0u64;
-    let mut cur_prompt = seed_prompt;
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) if !l.trim().is_empty() => l,
-            _ => continue,
-        };
-        let ev = match source.parse_line(&line) {
-            Some(e) => e,
-            None => continue, // битая строка — пропуск
-        };
-
-        // Линковка субагента.
-        if let Some((aid, atype)) = &ev.agent_link {
-            conn.execute(
-                "INSERT OR REPLACE INTO agent_meta(id,agent_type) VALUES(?1,?2)",
-                rusqlite::params![aid, atype],
-            )?;
-        }
-
-        // tool_result → пометить is_error у соответствующего tool_call.
-        for (tuid, err) in &ev.tool_results {
-            if *err {
+/// Применить нормализованные события одного файла к БД. Возврат: число turn'ов.
+fn apply_events(conn: &Connection, src: &str, events: &[Event]) -> Result<u64> {
+    let mut turns = 0u64;
+    for ev in events {
+        match ev {
+            Event::AgentLink { id, agent_type } => {
                 conn.execute(
-                    "UPDATE tool_calls SET is_error=1 WHERE tool_use_id=?1",
-                    rusqlite::params![tuid],
+                    "INSERT OR REPLACE INTO agent_meta(id,agent_type) VALUES(?1,?2)",
+                    rusqlite::params![id, agent_type],
                 )?;
             }
-        }
-
-        // user-строка задаёт текущий promptId; текст промпта (если не шум).
-        if let Some(pid) = &ev.prompt_id {
-            cur_prompt = Some(pid.clone());
-            if let Some(clean) = &ev.prompt_text {
-                let trimmed: String = clean.chars().take(200).collect();
-                conn.execute(
-                    "INSERT OR IGNORE INTO prompt_text(prompt_id,text) VALUES(?1,?2)",
-                    rusqlite::params![pid, trimmed],
-                )?;
-                // Для субагентского файла — первый промпт агента (смысл вместо hash-id).
-                if let Some(arid) = &agent_run_id {
-                    let snip: String = clean.chars().take(160).collect();
+            Event::ToolResult { tool_use_id, is_error } => {
+                if *is_error {
                     conn.execute(
-                        "INSERT OR IGNORE INTO agent_prompt(id,text) VALUES(?1,?2)",
-                        rusqlite::params![arid, snip],
+                        "UPDATE tool_calls SET is_error=1 WHERE tool_use_id=?1",
+                        rusqlite::params![tool_use_id],
+                    )?;
+                }
+            }
+            Event::Prompt { prompt_id, text, agent_run_id } => {
+                if let Some(clean) = text {
+                    let trimmed: String = clean.chars().take(200).collect();
+                    conn.execute(
+                        "INSERT OR IGNORE INTO prompt_text(prompt_id,text) VALUES(?1,?2)",
+                        rusqlite::params![prompt_id, trimmed],
+                    )?;
+                    // Субагентский файл — первый промпт агента (смысл вместо hash-id).
+                    if let Some(arid) = agent_run_id {
+                        let snip: String = clean.chars().take(160).collect();
+                        conn.execute(
+                            "INSERT OR IGNORE INTO agent_prompt(id,text) VALUES(?1,?2)",
+                            rusqlite::params![arid, snip],
+                        )?;
+                    }
+                }
+            }
+            Event::Turn(t) => {
+                let cost = t.cost.unwrap_or_else(|| pricing::cost_of(&t.model, &t.usage));
+                // OR IGNORE: OpenCode дедупит по (source, ext_id); Claude ext_id NULL — всегда вставка.
+                let n = conn.execute(
+                    "INSERT OR IGNORE INTO turns(prompt_id,session_id,project,source,ext_id,agent_run_id,
+                       is_sidechain,model,ts,input_tokens,output_tokens,cache_write_5m,cache_write_1h,
+                       cache_read,web_search,web_fetch,cost_usd,stop_reason)
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                    rusqlite::params![
+                        t.prompt_id,
+                        t.session_id,
+                        t.project,
+                        src,
+                        t.ext_id,
+                        t.agent_run_id,
+                        t.is_sidechain as i64,
+                        t.model,
+                        t.ts,
+                        t.usage.input as i64,
+                        t.usage.output as i64,
+                        t.usage.cache_write_5m as i64,
+                        t.usage.cache_write_1h as i64,
+                        t.usage.cache_read as i64,
+                        t.usage.web_search as i64,
+                        t.usage.web_fetch as i64,
+                        cost,
+                        t.stop_reason,
+                    ],
+                )?;
+                if n == 0 {
+                    continue; // дубль (уже проиндексирован) — сессию/тулзы не переписываем
+                }
+                turns += 1;
+
+                for (tuid, name) in &t.tool_uses {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO tool_calls(tool_use_id,name,project,source,session_id,agent_run_id)
+                         VALUES(?1,?2,?3,?4,?5,?6)",
+                        rusqlite::params![tuid, name, t.project, src, t.session_id, t.agent_run_id],
+                    )?;
+                }
+
+                // upsert session (контекст берём с первого попавшегося turn'а сессии).
+                if let Some(sid) = &t.session_id {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO sessions(session_id,project,source,cwd,git_branch,first_ts,last_ts,version)
+                         VALUES(?1,?2,?3,?4,?5,?6,?6,?7)",
+                        rusqlite::params![sid, t.project, src, t.cwd, t.git_branch, t.ts, t.version],
+                    )?;
+                    conn.execute(
+                        "UPDATE sessions SET last_ts=MAX(last_ts,?2), first_ts=MIN(first_ts,?2)
+                         WHERE session_id=?1",
+                        rusqlite::params![sid, t.ts],
                     )?;
                 }
             }
         }
-
-        // assistant-turn.
-        let turn = match ev.turn {
-            Some(t) => t,
-            None => continue,
-        };
-        let cost = pricing::cost_of(&turn.model, &turn.usage);
-
-        conn.execute(
-            "INSERT INTO turns(prompt_id,session_id,project,source,agent_run_id,is_sidechain,model,ts,
-               input_tokens,output_tokens,cache_write_5m,cache_write_1h,cache_read,
-               web_search,web_fetch,cost_usd,stop_reason)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
-            rusqlite::params![
-                cur_prompt,
-                turn.session_id,
-                project,
-                src,
-                agent_run_id,
-                turn.is_sidechain as i64,
-                turn.model,
-                turn.ts,
-                turn.usage.input as i64,
-                turn.usage.output as i64,
-                turn.usage.cache_write_5m as i64,
-                turn.usage.cache_write_1h as i64,
-                turn.usage.cache_read as i64,
-                turn.usage.web_search as i64,
-                turn.usage.web_fetch as i64,
-                cost,
-                turn.stop_reason,
-            ],
-        )?;
-
-        // tool_use блоки этого turn'а → tool_calls (is_error проставит tool_result).
-        for (tuid, name) in &turn.tool_uses {
-            conn.execute(
-                "INSERT OR IGNORE INTO tool_calls(tool_use_id,name,project,source,session_id,agent_run_id)
-                 VALUES(?1,?2,?3,?4,?5,?6)",
-                rusqlite::params![tuid, name, project, src, turn.session_id, agent_run_id],
-            )?;
-        }
-
-        // upsert session (контекст берём с первого попавшегося turn'а сессии).
-        if let Some(sid) = &turn.session_id {
-            conn.execute(
-                "INSERT OR IGNORE INTO sessions(session_id,project,source,cwd,git_branch,first_ts,last_ts,version)
-                 VALUES(?1,?2,?3,?4,?5,?6,?6,?7)",
-                rusqlite::params![
-                    sid, project, src, turn.cwd, turn.git_branch, turn.ts, turn.version,
-                ],
-            )?;
-            conn.execute(
-                "UPDATE sessions SET last_ts=MAX(last_ts,?2), first_ts=MIN(first_ts,?2)
-                 WHERE session_id=?1",
-                rusqlite::params![sid, turn.ts],
-            )?;
-        }
-        count += 1;
     }
-    Ok((count, cur_prompt))
+    Ok(turns)
 }
 
 /// Пересобрать агрегаты tasks и agent_runs из turns (денормализация вверх).

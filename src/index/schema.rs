@@ -92,6 +92,7 @@ pub fn init(conn: &Connection) -> Result<()> {
             session_id     TEXT,
             project        TEXT,
             source         TEXT,
+            ext_id         TEXT,     -- стабильный id turn'а из источника (дедуп иммутабельных файлов)
             agent_run_id   TEXT,
             is_sidechain   INTEGER,
             model          TEXT,
@@ -135,7 +136,12 @@ pub fn init(conn: &Connection) -> Result<()> {
 
     migrate(conn)?;
 
-    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_turns_source ON turns(source);")?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_turns_source ON turns(source);
+         -- дедуп OpenCode-turn'ов по (source, ext_id); NULL (Claude) в индекс не входят.
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_extid ON turns(source, ext_id)
+             WHERE ext_id IS NOT NULL;",
+    )?;
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version', ?1)",
         [SCHEMA_VERSION],
@@ -143,29 +149,26 @@ pub fn init(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Аддитивные миграции существующих БД. Данные — производная от транскриптов,
-/// но `source` можно доставить без reindex: до v2 всё было Claude Code.
+/// Аддитивные миграции существующих БД: доливаем недостающие колонки. Проверяем по
+/// наличию колонки (а не по версии) — устойчиво к любому промежуточному состоянию.
+/// До v2 всё было Claude Code, поэтому `source` доливаем с DEFAULT 'claude' без reindex.
 fn migrate(conn: &Connection) -> Result<()> {
-    let cur: i64 = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key='schema_version'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    for t in ["sessions", "tasks", "agent_runs", "turns", "tool_calls"] {
+        ensure_col(conn, t, "source", "TEXT DEFAULT 'claude'")?;
+    }
+    ensure_col(conn, "turns", "ext_id", "TEXT")?;
+    Ok(())
+}
 
-    // v1 → v2: колонки source не было. CREATE TABLE IF NOT EXISTS её не добавит на
-    // старой БД → доливаем ALTER'ом с DEFAULT 'claude' (все прежние данные — Claude).
-    if cur == 1 {
-        for t in ["sessions", "tasks", "agent_runs", "turns", "tool_calls"] {
-            // Если колонка уже есть — ALTER упадёт; игнорируем (идемпотентность).
-            let _ = conn.execute(
-                &format!("ALTER TABLE {t} ADD COLUMN source TEXT DEFAULT 'claude'"),
-                [],
-            );
-        }
+/// Добавить колонку, если её ещё нет (идемпотентно).
+fn ensure_col(conn: &Connection, table: &str, col: &str, decl: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == col);
+    if !exists {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), [])?;
     }
     Ok(())
 }
