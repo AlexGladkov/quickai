@@ -7,6 +7,7 @@ mod mcp;
 mod model;
 mod parse;
 mod pricing;
+mod proxy;
 mod query;
 mod report;
 mod source;
@@ -107,6 +108,15 @@ enum Cmd {
     },
     /// Запустить MCP-сервер (stdio) — те же запросы из диалога
     Mcp,
+    /// Live-capture прокси к LLM API (для харнессов без своих логов, напр. Codex)
+    Proxy {
+        /// Порт локального прокси
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+        /// Базовый URL провайдера (куда форвардить)
+        #[arg(long, default_value = "https://api.openai.com")]
+        upstream: String,
+    },
     /// Экспорт агрегатов в машинно-читаемый дамп для внешнего сбора
     Export {
         /// Фильтр по проекту (подстрока) — пусто = все проекты
@@ -239,6 +249,9 @@ fn main() -> Result<()> {
         }
         Cmd::Mcp => {
             mcp::serve()?;
+        }
+        Cmd::Proxy { port, upstream } => {
+            proxy::serve(port, upstream)?;
         }
         Cmd::Export { project, pretty, format } => {
             let conn = index::open_db()?;

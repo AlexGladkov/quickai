@@ -17,6 +17,14 @@ anyhow = "1"
 walkdir = "2"
 chrono = { version = "0.4", features = ["clock"] }
 
+# Live-capture прокси (команда `proxy`) — прозрачный reverse-proxy к LLM API.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "http2", "json"] }
+futures-util = "0.3"
+async-stream = "0.3"
+bytes = "1"
+
 [profile.release]
 lto = true
 codegen-units = 1

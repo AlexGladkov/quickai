@@ -11,6 +11,7 @@
 
 pub mod claude;
 pub mod opencode;
+pub mod proxy;
 
 use crate::model::Usage;
 use anyhow::Result;
@@ -86,6 +87,7 @@ pub fn resolve(name: &str) -> Result<Box<dyn DataSource>> {
     match name {
         "claude" => Ok(Box::new(claude::ClaudeSource)),
         "opencode" => Ok(Box::new(opencode::OpenCodeSource::new())),
-        other => anyhow::bail!("неизвестный источник: {other} (доступно: claude, opencode)"),
+        "proxy" => Ok(Box::new(proxy::ProxySource)),
+        other => anyhow::bail!("неизвестный источник: {other} (доступно: claude, opencode, proxy)"),
     }
 }
