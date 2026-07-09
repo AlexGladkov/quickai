@@ -22,6 +22,11 @@ pub fn price_for(model: &str) -> Price {
         m if m.contains("sonnet") => Price { input_per_mtok: 3.0, output_per_mtok: 15.0 },
         m if m.contains("haiku") => Price { input_per_mtok: 1.0, output_per_mtok: 5.0 },
         m if m.contains("fable") => Price { input_per_mtok: 10.0, output_per_mtok: 50.0 },
+        // OpenAI (для source=proxy, напр. Codex). Список-цены на 2026-07 — ПЕРЕПРОВЕРИТЬ.
+        m if m.contains("codex") || m.contains("gpt-5") => Price { input_per_mtok: 1.25, output_per_mtok: 10.0 },
+        m if m.contains("o3") || m.contains("o1") => Price { input_per_mtok: 2.0, output_per_mtok: 8.0 },
+        m if m.contains("gpt-4") => Price { input_per_mtok: 2.5, output_per_mtok: 10.0 },
+        m if m.contains("gpt") => Price { input_per_mtok: 1.25, output_per_mtok: 10.0 },
         // Неизвестная модель → не занижаем, считаем по Opus.
         _ => Price { input_per_mtok: 5.0, output_per_mtok: 25.0 },
     }
